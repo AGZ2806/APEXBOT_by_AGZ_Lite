@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 # --- Config Defaults ---
 DEFAULT_START = "2024-10-20"
 DEFAULT_END = "2024-12-31" 
-SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "BNB-USDT-SWAP", "XRP-USDT-SWAP"]
+SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 BASE_URL = "https://www.okx.com/cdn/okex/traderecords" 
 
 # Data Types to Download
