@@ -1,0 +1,9 @@
+app_settings:
+  sound_alerts: true
+pairs_trading:
+  hedge_ratio: 0.5
+  notional_per_leg: 160.0
+  z_entry_threshold: 4.0
+symbols:
+- BTC/USDT:USDT
+- ETH/USDT:USDT
