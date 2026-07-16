@@ -39,5 +39,12 @@ python gui_main.py
 - **Non-Custodial:** Your API keys are encrypted locally on your machine and only used to connect directly to Binance. We never see them.
 - **Open Infrastructure:** You can read the source code to verify exactly how the bot handles your keys and executes trades.
 
+## Verify the Math Yourself (Backtesting Toolkit)
+To prove the efficiency of this model, I have included the raw backtesting scripts in the `backtesting_toolkit` folder. You can download historical data from OKX and recreate my performance results on your own machine.
+
+1. Run `python backtesting_toolkit/download_all_okx.py` to download historical market data.
+2. Run `python backtesting_toolkit/backtest_pairs.py` to simulate the stat-arb strategy over the downloaded data.
+3. Analyze the output to see the Sharpe ratio, max drawdown, and beta-weighted yield.
+
 ## Community
 Have questions? Want to share your results? Join the discussion on our subreddit: `r/CryptoTradingBot`.
