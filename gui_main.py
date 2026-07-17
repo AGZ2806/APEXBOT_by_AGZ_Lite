@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 
-CURRENT_VERSION = "3.0.3"
+CURRENT_VERSION = "3.0.6"
 
 # Force Current Working Directory to the executable's folder
 if getattr(sys, 'frozen', False):
@@ -443,10 +443,15 @@ class PairsTraderGUI(ctk.CTk):
             self.combo_sym_a.set("BTC/USDT:USDT")
             self.combo_sym_b.set("ETH/USDT:USDT")
             self.frm_symbols.pack_forget()
+            self.lbl_zthresh.pack_forget()
+            self.entry_zthresh.pack_forget()
             self.save_yaml_config()
             print(f"Strategy changed to {choice}")
         elif choice == "Custom Pairs":
             self.frm_symbols.pack(fill="x", pady=0, after=self.warn_frame)
+            self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
+            self.entry_zthresh.pack(anchor="w", padx=20)
+            self.entry_zthresh.configure(state="normal")
             print("Strategy changed to Custom Pairs. Please select symbols manually.")
 
     def verify_sizing(self):
@@ -546,8 +551,11 @@ class PairsTraderGUI(ctk.CTk):
         self.lbl_sizing_warn = ctk.CTkLabel(self.frm_settings, text="", text_color="yellow")
         self.lbl_sizing_warn.pack(anchor="w", padx=20)
 
-        ctk.CTkLabel(self.frm_settings, text="Z-Score Entry Threshold (Optional Override):").pack(anchor="w", padx=20, pady=(20, 0))
-        self.entry_zthresh = ctk.CTkEntry(self.frm_settings, width=300)
+        self.frm_z_container = ctk.CTkFrame(self.frm_settings, fg_color="transparent")
+        self.frm_z_container.pack(fill="x")
+        self.lbl_zthresh = ctk.CTkLabel(self.frm_z_container, text="Z-Score Entry Threshold (Optional Override):")
+        self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
+        self.entry_zthresh = ctk.CTkEntry(self.frm_z_container, width=300)
         self.entry_zthresh.pack(anchor="w", padx=20)
 
         ctk.CTkLabel(self.frm_settings, text="Risk Mode (Hedge Ratio):").pack(anchor="w", padx=20, pady=(20, 0))
@@ -836,21 +844,28 @@ class PairsTraderGUI(ctk.CTk):
         # Process logs
         if hasattr(self, 'log_queue'):
             import queue
-            while True:
+            logs_processed = 0
+            self.txt_logs.configure(state="normal")
+            while logs_processed < 50:
                 try:
                     msg = self.log_queue.get_nowait()
                     # Sanitize message
                     sensitive_words = ["z-score", "half-life", "mean", "deviation", "ratio", "kalman", "zscore", "shm", "math", "z=", "dynz", "decay", "hedge", "hold", "corrmin", "sizing", "notional", "stoploss", "profile"]
-                    msg_lower = msg.lower()
-                    if any(w in msg_lower for w in sensitive_words):
+                    if any(w in msg.lower() for w in sensitive_words):
                         continue
                     
-                    self.txt_logs.configure(state="normal")
                     self.txt_logs.insert("end", msg)
-                    self.txt_logs.see("end")
-                    self.txt_logs.configure(state="disabled")
+                    logs_processed += 1
                 except queue.Empty:
                     break
+            
+            if logs_processed > 0:
+                # Trim log to prevent GUI lag over time (Do this once per batch)
+                line_count = int(float(self.txt_logs.index('end-1c')))
+                if line_count > 1000:
+                    self.txt_logs.delete("1.0", f"{line_count - 1000 + 1}.0")
+                self.txt_logs.see("end")
+            self.txt_logs.configure(state="disabled")
             
         self.after(500, self.update_ui_loop)
 
@@ -882,8 +897,15 @@ class PairsTraderGUI(ctk.CTk):
                 self.entry_notional.delete(0, "end")
                 self.entry_notional.insert(0, str(pt.get("notional_per_leg", 160.0)))
                 
+                self.entry_zthresh.configure(state="normal")
                 self.entry_zthresh.delete(0, "end")
                 self.entry_zthresh.insert(0, str(pt.get("z_entry_threshold", 3.0)))
+                if sym_a == "BTC/USDT:USDT" and sym_b == "ETH/USDT:USDT":
+                    self.lbl_zthresh.pack_forget()
+                    self.entry_zthresh.pack_forget()
+                else:
+                    self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
+                    self.entry_zthresh.pack(anchor="w", padx=20)
                 
                 hr = pt.get("hedge_ratio", 0.5)
                 if hr == 1.0:
@@ -1078,8 +1100,8 @@ class PairsTraderGUI(ctk.CTk):
 
             self.bot_processes = []
             if not hasattr(self, 'log_queue'):
-                import multiprocessing
-                self.log_queue = multiprocessing.Queue()
+                # Used to stream sanitized logs from trader. Max size prevents OOM during log bursts.
+                self.log_queue = multiprocessing.Queue(maxsize=200)
                 
             is_scribe_running = False
             import phase23_shm as sm
