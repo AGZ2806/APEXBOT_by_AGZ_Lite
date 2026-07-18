@@ -5,7 +5,7 @@ matplotlib.use('TkAgg')
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
-CURRENT_VERSION='3.0.6'
+CURRENT_VERSION='3.0.7'
 if getattr(sys,'frozen',False):APP_DIR=os.path.dirname(sys.executable)
 else:APP_DIR=os.path.dirname(os.path.abspath(__file__))
 os.chdir(APP_DIR)
