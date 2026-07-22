@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 
-CURRENT_VERSION = "3.0.8"
+CURRENT_VERSION = "3.1.0"
 
 # Force Current Working Directory to the executable's folder
 if getattr(sys, 'frozen', False):
@@ -56,17 +56,22 @@ class ObfuscatedLogger:
         self.queue = queue
         self.terminal = sys.stdout
         self.buffer = []
+        self.queue_buffer = ""
         self.last_write = time.time()
 
     def write(self, message):
         import time
         self.terminal.write(message)
         
+        # Build full lines for the GUI queue to prevent fragment spam
         if self.queue:
-            try:
-                self.queue.put_nowait(message)
-            except:
-                pass
+            self.queue_buffer += message
+            while "\n" in self.queue_buffer:
+                line, self.queue_buffer = self.queue_buffer.split("\n", 1)
+                try:
+                    self.queue.put_nowait(line + "\n")
+                except:
+                    pass
         
         if message.strip():
             self.buffer.append(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
@@ -409,11 +414,19 @@ class PairsTraderGUI(ctk.CTk):
         def _loop():
             news_items = ["Live Market Tracking Active..."]
             news_idx = 0
+            session = requests.Session()
+            session_start = time.time()
             
             while True:
+                # 12-hour session reset
+                if time.time() - session_start > 43200:
+                    session.close()
+                    session = requests.Session()
+                    session_start = time.time()
+
                 try:
                     # Fetch Tickers
-                    r = requests.get("https://fapi.binance.com/fapi/v1/ticker/price?symbols=[\"SOLUSDT\",\"BNBUSDT\"]", timeout=5).json()
+                    r = session.get("https://fapi.binance.com/fapi/v1/ticker/price?symbols=[\"SOLUSDT\",\"BNBUSDT\"]", timeout=5).json()
                     for tick in r:
                         if tick['symbol'] == 'SOLUSDT':
                             self.val_mark_sol.configure(text=f"SOL\n${float(tick['price']):.2f}")
@@ -426,7 +439,7 @@ class PairsTraderGUI(ctk.CTk):
                     # Fetch News every 50 loops (250s)
                     if news_idx % 50 == 0:
                         import xml.etree.ElementTree as ET
-                        nr = requests.get("https://cointelegraph.com/rss", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).text
+                        nr = session.get("https://cointelegraph.com/rss", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).text
                         root = ET.fromstring(nr)
                         news_items = [item.find('title').text for item in root.findall('.//item')[:5] if item.find('title') is not None]
                     
@@ -702,10 +715,19 @@ class PairsTraderGUI(ctk.CTk):
         lbl = ctk.CTkLabel(self.frm_help, text=help_text, justify="left", font=ctk.CTkFont(size=14))
         lbl.pack(anchor="w", padx=20, pady=10)
     def ping_loop(self):
+        import requests
+        session = requests.Session()
+        session_start = time.time()
         while True:
+            # 12-hour session reset to prevent remote disconnects and local port leaks
+            if time.time() - session_start > 43200:
+                session.close()
+                session = requests.Session()
+                session_start = time.time()
+                
             try:
                 start = time.time()
-                resp = requests.get("https://fapi.binance.com/fapi/v1/ping", timeout=5)
+                resp = session.get("https://fapi.binance.com/fapi/v1/ping", timeout=5)
                 if resp.status_code == 200:
                     self.latency_ms = int((time.time() - start) * 1000)
                     self.is_unstable = self.latency_ms > 5000
@@ -863,26 +885,44 @@ class PairsTraderGUI(ctk.CTk):
         # Process logs
         if hasattr(self, 'log_queue'):
             import queue
-            logs_processed = 0
             self.txt_logs.configure(state="normal")
-            while logs_processed < 50:
+            
+            # Batch read from queue
+            batch_text = ""
+            while True:
                 try:
                     msg = self.log_queue.get_nowait()
                     # Sanitize message
+                    is_sensitive = False
                     sensitive_words = ["z-score", "half-life", "mean", "deviation", "ratio", "kalman", "zscore", "shm", "math", "z=", "dynz", "decay", "hedge", "hold", "corrmin", "sizing", "notional", "stoploss", "profile"]
-                    if any(w in msg.lower() for w in sensitive_words):
+                    for w in sensitive_words:
+                        if w in msg.lower():
+                            is_sensitive = True
+                            break
+                    
+                    if is_sensitive:
+                        # If it's a slow loop heartbeat, redact math but keep the heartbeat alive
+                        if "[~" in msg:
+                            parts = msg.strip("\n").split(" | ")
+                            safe_parts = [p if not any(w in p.lower() for w in sensitive_words) else "[MATH REDACTED]" for p in parts]
+                            batch_text += " | ".join(safe_parts) + "\n"
                         continue
                     
-                    self.txt_logs.insert("end", msg)
-                    logs_processed += 1
+                    batch_text += msg
                 except queue.Empty:
                     break
             
-            if logs_processed > 0:
-                # Trim log to prevent GUI lag over time (Do this once per batch)
-                line_count = int(float(self.txt_logs.index('end-1c')))
-                if line_count > 1000:
-                    self.txt_logs.delete("1.0", f"{line_count - 1000 + 1}.0")
+            if batch_text:
+                self.txt_logs.insert("end", batch_text)
+                
+                # Trim log via Python strings to prevent Tkinter fragmentation lag
+                full_text = self.txt_logs.get("1.0", "end-1c")
+                lines = full_text.split("\n")
+                if len(lines) > 1000:
+                    trimmed_text = "\n".join(lines[-1000:])
+                    self.txt_logs.delete("1.0", "end")
+                    self.txt_logs.insert("end", trimmed_text)
+                    
                 self.txt_logs.see("end")
             self.txt_logs.configure(state="disabled")
             
