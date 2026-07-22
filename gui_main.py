@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 
-CURRENT_VERSION = "3.0.7"
+CURRENT_VERSION = "3.0.8"
 
 # Force Current Working Directory to the executable's folder
 if getattr(sys, 'frozen', False):
@@ -41,7 +41,8 @@ def run_scribe():
     sys.stderr = sys.stdout
     try:
         from scribe import main as scribe_main
-        asyncio.run(scribe_main())
+        is_frozen = getattr(sys, 'frozen', False)
+        asyncio.run(scribe_main(cli_mode=not is_frozen))
     except KeyboardInterrupt:
         pass
     except Exception as e:
@@ -50,31 +51,49 @@ def run_scribe():
 
 class ObfuscatedLogger:
     def __init__(self, filename, queue=None):
-        import sys
+        import sys, time
         self.filename = filename
         self.queue = queue
         self.terminal = sys.stdout
+        self.buffer = []
+        self.last_write = time.time()
 
     def write(self, message):
-        import zlib, base64, time
+        import time
         self.terminal.write(message)
-        if not message.strip():
-            return
+        
         if self.queue:
             try:
                 self.queue.put_nowait(message)
             except:
                 pass
+        
+        if message.strip():
+            self.buffer.append(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
+        else:
+            self.buffer.append(message)
+        
+        # Batch write to disk every 2 seconds or 100 logs to prevent I/O lag
+        if len(self.buffer) > 100 or (time.time() - self.last_write) > 2.0:
+            self.flush_buffer()
+
+    def flush_buffer(self):
+        if not self.buffer:
+            return
+        import zlib, base64, time
         try:
             with open(self.filename, 'a') as f:
-                msg_with_time = f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}"
-                compressed = zlib.compress(msg_with_time.encode('utf-8'))
+                joined_msg = "".join(self.buffer)
+                compressed = zlib.compress(joined_msg.encode('utf-8'))
                 b64 = base64.b64encode(compressed).decode('utf-8')
                 f.write(b64 + "\n")
         except:
             pass
+        self.buffer.clear()
+        self.last_write = time.time()
             
     def flush(self):
+        self.flush_buffer()
         self.terminal.flush()
 
 def run_trader(log_queue=None):
