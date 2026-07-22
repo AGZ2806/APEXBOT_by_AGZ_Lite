@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 
-CURRENT_VERSION = "3.0.3"
+CURRENT_VERSION = "3.1.0"
 
 # Force Current Working Directory to the executable's folder
 if getattr(sys, 'frozen', False):
@@ -41,7 +41,8 @@ def run_scribe():
     sys.stderr = sys.stdout
     try:
         from scribe import main as scribe_main
-        asyncio.run(scribe_main())
+        is_frozen = getattr(sys, 'frozen', False)
+        asyncio.run(scribe_main(cli_mode=not is_frozen))
     except KeyboardInterrupt:
         pass
     except Exception as e:
@@ -50,31 +51,54 @@ def run_scribe():
 
 class ObfuscatedLogger:
     def __init__(self, filename, queue=None):
-        import sys
+        import sys, time
         self.filename = filename
         self.queue = queue
         self.terminal = sys.stdout
+        self.buffer = []
+        self.queue_buffer = ""
+        self.last_write = time.time()
 
     def write(self, message):
-        import zlib, base64, time
+        import time
         self.terminal.write(message)
-        if not message.strip():
-            return
+        
+        # Build full lines for the GUI queue to prevent fragment spam
         if self.queue:
-            try:
-                self.queue.put_nowait(message)
-            except:
-                pass
+            self.queue_buffer += message
+            while "\n" in self.queue_buffer:
+                line, self.queue_buffer = self.queue_buffer.split("\n", 1)
+                try:
+                    self.queue.put_nowait(line + "\n")
+                except:
+                    pass
+        
+        if message.strip():
+            self.buffer.append(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
+        else:
+            self.buffer.append(message)
+        
+        # Batch write to disk every 2 seconds or 100 logs to prevent I/O lag
+        if len(self.buffer) > 100 or (time.time() - self.last_write) > 2.0:
+            self.flush_buffer()
+
+    def flush_buffer(self):
+        if not self.buffer:
+            return
+        import zlib, base64, time
         try:
             with open(self.filename, 'a') as f:
-                msg_with_time = f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}"
-                compressed = zlib.compress(msg_with_time.encode('utf-8'))
+                joined_msg = "".join(self.buffer)
+                compressed = zlib.compress(joined_msg.encode('utf-8'))
                 b64 = base64.b64encode(compressed).decode('utf-8')
                 f.write(b64 + "\n")
         except:
             pass
+        self.buffer.clear()
+        self.last_write = time.time()
             
     def flush(self):
+        self.flush_buffer()
         self.terminal.flush()
 
 def run_trader(log_queue=None):
@@ -390,11 +414,19 @@ class PairsTraderGUI(ctk.CTk):
         def _loop():
             news_items = ["Live Market Tracking Active..."]
             news_idx = 0
+            session = requests.Session()
+            session_start = time.time()
             
             while True:
+                # 12-hour session reset
+                if time.time() - session_start > 43200:
+                    session.close()
+                    session = requests.Session()
+                    session_start = time.time()
+
                 try:
                     # Fetch Tickers
-                    r = requests.get("https://fapi.binance.com/fapi/v1/ticker/price?symbols=[\"SOLUSDT\",\"BNBUSDT\"]", timeout=5).json()
+                    r = session.get("https://fapi.binance.com/fapi/v1/ticker/price?symbols=[\"SOLUSDT\",\"BNBUSDT\"]", timeout=5).json()
                     for tick in r:
                         if tick['symbol'] == 'SOLUSDT':
                             self.val_mark_sol.configure(text=f"SOL\n${float(tick['price']):.2f}")
@@ -407,7 +439,7 @@ class PairsTraderGUI(ctk.CTk):
                     # Fetch News every 50 loops (250s)
                     if news_idx % 50 == 0:
                         import xml.etree.ElementTree as ET
-                        nr = requests.get("https://cointelegraph.com/rss", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).text
+                        nr = session.get("https://cointelegraph.com/rss", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).text
                         root = ET.fromstring(nr)
                         news_items = [item.find('title').text for item in root.findall('.//item')[:5] if item.find('title') is not None]
                     
@@ -443,10 +475,15 @@ class PairsTraderGUI(ctk.CTk):
             self.combo_sym_a.set("BTC/USDT:USDT")
             self.combo_sym_b.set("ETH/USDT:USDT")
             self.frm_symbols.pack_forget()
+            self.lbl_zthresh.pack_forget()
+            self.entry_zthresh.pack_forget()
             self.save_yaml_config()
             print(f"Strategy changed to {choice}")
         elif choice == "Custom Pairs":
             self.frm_symbols.pack(fill="x", pady=0, after=self.warn_frame)
+            self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
+            self.entry_zthresh.pack(anchor="w", padx=20)
+            self.entry_zthresh.configure(state="normal")
             print("Strategy changed to Custom Pairs. Please select symbols manually.")
 
     def verify_sizing(self):
@@ -546,8 +583,11 @@ class PairsTraderGUI(ctk.CTk):
         self.lbl_sizing_warn = ctk.CTkLabel(self.frm_settings, text="", text_color="yellow")
         self.lbl_sizing_warn.pack(anchor="w", padx=20)
 
-        ctk.CTkLabel(self.frm_settings, text="Z-Score Entry Threshold (Optional Override):").pack(anchor="w", padx=20, pady=(20, 0))
-        self.entry_zthresh = ctk.CTkEntry(self.frm_settings, width=300)
+        self.frm_z_container = ctk.CTkFrame(self.frm_settings, fg_color="transparent")
+        self.frm_z_container.pack(fill="x")
+        self.lbl_zthresh = ctk.CTkLabel(self.frm_z_container, text="Z-Score Entry Threshold (Optional Override):")
+        self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
+        self.entry_zthresh = ctk.CTkEntry(self.frm_z_container, width=300)
         self.entry_zthresh.pack(anchor="w", padx=20)
 
         ctk.CTkLabel(self.frm_settings, text="Risk Mode (Hedge Ratio):").pack(anchor="w", padx=20, pady=(20, 0))
@@ -675,10 +715,19 @@ class PairsTraderGUI(ctk.CTk):
         lbl = ctk.CTkLabel(self.frm_help, text=help_text, justify="left", font=ctk.CTkFont(size=14))
         lbl.pack(anchor="w", padx=20, pady=10)
     def ping_loop(self):
+        import requests
+        session = requests.Session()
+        session_start = time.time()
         while True:
+            # 12-hour session reset to prevent remote disconnects and local port leaks
+            if time.time() - session_start > 43200:
+                session.close()
+                session = requests.Session()
+                session_start = time.time()
+                
             try:
                 start = time.time()
-                resp = requests.get("https://fapi.binance.com/fapi/v1/ping", timeout=5)
+                resp = session.get("https://fapi.binance.com/fapi/v1/ping", timeout=5)
                 if resp.status_code == 200:
                     self.latency_ms = int((time.time() - start) * 1000)
                     self.is_unstable = self.latency_ms > 5000
@@ -741,24 +790,24 @@ class PairsTraderGUI(ctk.CTk):
 
     def update_chart_loop(self):
         try:
-            if getattr(self, 'bot_running', False) and hasattr(self, 'chart_data_ratio'):
-                self.ax.clear()
-                
+            if getattr(self, 'bot_running', False) and hasattr(self, 'chart_data_ratio') and len(self.chart_data_ratio) > 0:
                 color_ratio = "#AA00FF"
+                if not hasattr(self, 'ratio_line'):
+                    self.ax.clear()
+                    self.ratio_line, = self.ax.plot(range(len(self.chart_data_ratio)), self.chart_data_ratio, color=color_ratio, linewidth=1.5, label="Price Ratio")
+                    self.ax.set_facecolor(self.color_card)
+                    self.ax.tick_params(colors=self.color_text_muted, labelsize=8)
+                    self.ax.spines['bottom'].set_color('#333333')
+                    self.ax.spines['top'].set_color('#333333') 
+                    self.ax.spines['right'].set_color('#333333')
+                    self.ax.spines['left'].set_color('#333333')
+                else:
+                    self.ratio_line.set_ydata(self.chart_data_ratio)
+                    self.ratio_line.set_xdata(range(len(self.chart_data_ratio)))
+                    self.ax.relim()
+                    self.ax.autoscale_view()
                 
-                self.ax.plot(self.chart_data_ratio, color=color_ratio, linewidth=1.5, label="Price Ratio")
-                self.ax.set_facecolor(self.color_card)
-                self.ax.tick_params(colors=self.color_text_muted, labelsize=8)
-                
-                self.ax.spines['bottom'].set_color('#333333')
-                self.ax.spines['top'].set_color('#333333') 
-                self.ax.spines['right'].set_color('#333333')
-                self.ax.spines['left'].set_color('#333333')
-                
-                if len(self.chart_data_ratio) > 0:
-                    self.ax.fill_between(range(len(self.chart_data_ratio)), self.chart_data_ratio, min(self.chart_data_ratio), color=color_ratio, alpha=0.1)
-                
-                self.chart_canvas.draw()
+                self.chart_canvas.draw_idle()
         except Exception:
             pass
             
@@ -836,21 +885,46 @@ class PairsTraderGUI(ctk.CTk):
         # Process logs
         if hasattr(self, 'log_queue'):
             import queue
+            self.txt_logs.configure(state="normal")
+            
+            # Batch read from queue
+            batch_text = ""
             while True:
                 try:
                     msg = self.log_queue.get_nowait()
                     # Sanitize message
+                    is_sensitive = False
                     sensitive_words = ["z-score", "half-life", "mean", "deviation", "ratio", "kalman", "zscore", "shm", "math", "z=", "dynz", "decay", "hedge", "hold", "corrmin", "sizing", "notional", "stoploss", "profile"]
-                    msg_lower = msg.lower()
-                    if any(w in msg_lower for w in sensitive_words):
+                    for w in sensitive_words:
+                        if w in msg.lower():
+                            is_sensitive = True
+                            break
+                    
+                    if is_sensitive:
+                        # If it's a slow loop heartbeat, redact math but keep the heartbeat alive
+                        if "[~" in msg:
+                            parts = msg.strip("\n").split(" | ")
+                            safe_parts = [p if not any(w in p.lower() for w in sensitive_words) else "[MATH REDACTED]" for p in parts]
+                            batch_text += " | ".join(safe_parts) + "\n"
                         continue
                     
-                    self.txt_logs.configure(state="normal")
-                    self.txt_logs.insert("end", msg)
-                    self.txt_logs.see("end")
-                    self.txt_logs.configure(state="disabled")
+                    batch_text += msg
                 except queue.Empty:
                     break
+            
+            if batch_text:
+                self.txt_logs.insert("end", batch_text)
+                
+                # Trim log via Python strings to prevent Tkinter fragmentation lag
+                full_text = self.txt_logs.get("1.0", "end-1c")
+                lines = full_text.split("\n")
+                if len(lines) > 1000:
+                    trimmed_text = "\n".join(lines[-1000:])
+                    self.txt_logs.delete("1.0", "end")
+                    self.txt_logs.insert("end", trimmed_text)
+                    
+                self.txt_logs.see("end")
+            self.txt_logs.configure(state="disabled")
             
         self.after(500, self.update_ui_loop)
 
@@ -882,8 +956,15 @@ class PairsTraderGUI(ctk.CTk):
                 self.entry_notional.delete(0, "end")
                 self.entry_notional.insert(0, str(pt.get("notional_per_leg", 160.0)))
                 
+                self.entry_zthresh.configure(state="normal")
                 self.entry_zthresh.delete(0, "end")
                 self.entry_zthresh.insert(0, str(pt.get("z_entry_threshold", 3.0)))
+                if sym_a == "BTC/USDT:USDT" and sym_b == "ETH/USDT:USDT":
+                    self.lbl_zthresh.pack_forget()
+                    self.entry_zthresh.pack_forget()
+                else:
+                    self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
+                    self.entry_zthresh.pack(anchor="w", padx=20)
                 
                 hr = pt.get("hedge_ratio", 0.5)
                 if hr == 1.0:
@@ -1078,8 +1159,8 @@ class PairsTraderGUI(ctk.CTk):
 
             self.bot_processes = []
             if not hasattr(self, 'log_queue'):
-                import multiprocessing
-                self.log_queue = multiprocessing.Queue()
+                # Used to stream sanitized logs from trader. Max size prevents OOM during log bursts.
+                self.log_queue = multiprocessing.Queue(maxsize=200)
                 
             is_scribe_running = False
             import phase23_shm as sm
