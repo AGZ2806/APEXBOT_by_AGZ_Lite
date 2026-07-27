@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 
-CURRENT_VERSION = "3.1.0"
+CURRENT_VERSION = "4.0.0"
 
 # Force Current Working Directory to the executable's folder
 if getattr(sys, 'frozen', False):
@@ -38,6 +38,7 @@ def run_scribe():
     import os
     os.makedirs("logs", exist_ok=True)
     sys.stdout = TeeLogger("logs/scribe.log")
+    sys.stdout.terminal = None  # Disable CLI print routing to prevent conhost buffer lag
     sys.stderr = sys.stdout
     try:
         from scribe import main as scribe_main
@@ -61,7 +62,7 @@ class ObfuscatedLogger:
 
     def write(self, message):
         import time
-        self.terminal.write(message)
+        # self.terminal.write(message)  # Disabled to prevent conhost.exe buffer lag after 12h
         
         # Build full lines for the GUI queue to prevent fragment spam
         if self.queue:
@@ -381,7 +382,7 @@ class PairsTraderGUI(ctk.CTk):
         panel_logs.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(panel_logs, text="Sanitized Live System Logs (Math Protected)", font=ctk.CTkFont(family="Inter", size=14), text_color="white").pack(anchor="w", padx=15, pady=(10, 0))
         
-        self.txt_logs = ctk.CTkTextbox(panel_logs, height=100, fg_color="#1E1E1E", text_color="#A0A0A0", font=ctk.CTkFont(family="Consolas", size=11))
+        self.txt_logs = ctk.CTkTextbox(panel_logs, height=100, fg_color="#1E1E1E", text_color="#A0A0A0", font=ctk.CTkFont(family="Consolas", size=11), wrap="none")
         self.txt_logs.pack(fill="both", expand=True, padx=15, pady=10)
         self.txt_logs.configure(state="disabled")
         
@@ -477,6 +478,18 @@ class PairsTraderGUI(ctk.CTk):
             self.frm_symbols.pack_forget()
             self.lbl_zthresh.pack_forget()
             self.entry_zthresh.pack_forget()
+            self.lbl_risk_mode.pack_forget()
+            self.combo_risk_mode.pack_forget()
+            self.save_yaml_config()
+            print(f"Strategy changed to {choice}")
+        elif "ETH vs SOL" in choice:
+            self.combo_sym_a.set("ETH/USDT:USDT")
+            self.combo_sym_b.set("SOL/USDT:USDT")
+            self.frm_symbols.pack_forget()
+            self.lbl_zthresh.pack_forget()
+            self.entry_zthresh.pack_forget()
+            self.lbl_risk_mode.pack_forget()
+            self.combo_risk_mode.pack_forget()
             self.save_yaml_config()
             print(f"Strategy changed to {choice}")
         elif choice == "Custom Pairs":
@@ -484,6 +497,8 @@ class PairsTraderGUI(ctk.CTk):
             self.lbl_zthresh.pack(anchor="w", padx=20, pady=(20, 0))
             self.entry_zthresh.pack(anchor="w", padx=20)
             self.entry_zthresh.configure(state="normal")
+            self.lbl_risk_mode.pack(anchor="w", padx=20, pady=(20, 0))
+            self.combo_risk_mode.pack(anchor="w", padx=20)
             print("Strategy changed to Custom Pairs. Please select symbols manually.")
 
     def verify_sizing(self):
@@ -547,10 +562,10 @@ class PairsTraderGUI(ctk.CTk):
         ctk.CTkLabel(self.frm_settings, text="Strategy & Configuration", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=20, anchor="w", padx=20)
 
         ctk.CTkLabel(self.frm_settings, text="Select Predefined Strategy Template:", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=20, pady=(0, 5))
-        self.strategy_var = ctk.StringVar(value="BTC vs ETH (Optimized)")
+        self.strategy_var = ctk.StringVar(value="BTC vs ETH (Ultra-Safe)")
         self.strategy_dropdown = ctk.CTkOptionMenu(
             self.frm_settings, 
-            values=["BTC vs ETH (Optimized)", "Custom Pairs"],
+            values=["BTC vs ETH (Ultra-Safe)", "BTC vs ETH (Max Profit)", "ETH vs SOL (Optimized)", "Custom Pairs"],
             variable=self.strategy_var,
             command=self._on_strategy_change,
             width=300
@@ -559,7 +574,7 @@ class PairsTraderGUI(ctk.CTk):
 
         self.warn_frame = ctk.CTkFrame(self.frm_settings, fg_color="#4a3e00")
         self.warn_frame.pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(self.warn_frame, text="⚠️ CAUTION: BTC/USDT vs ETH/USDT is mathematically optimized.\nSelecting custom pairs enforces safe fallbacks (Z=3.0, Hedge=1.0)!", text_color="yellow").pack(pady=10)
+        ctk.CTkLabel(self.warn_frame, text="⚠️ CAUTION: Predefined profiles are mathematically optimized.\nSelecting custom pairs enforces safe fallbacks (Z=3.0, Hedge=1.0)!", text_color="yellow").pack(pady=10)
 
         self.frm_symbols = ctk.CTkFrame(self.frm_settings, fg_color="transparent")
         
@@ -590,7 +605,8 @@ class PairsTraderGUI(ctk.CTk):
         self.entry_zthresh = ctk.CTkEntry(self.frm_z_container, width=300)
         self.entry_zthresh.pack(anchor="w", padx=20)
 
-        ctk.CTkLabel(self.frm_settings, text="Risk Mode (Hedge Ratio):").pack(anchor="w", padx=20, pady=(20, 0))
+        self.lbl_risk_mode = ctk.CTkLabel(self.frm_settings, text="Risk Mode (Hedge Ratio):")
+        self.lbl_risk_mode.pack(anchor="w", padx=20, pady=(20, 0))
         self.combo_risk_mode = ctk.CTkOptionMenu(self.frm_settings, values=["Conservative (Hedge 0.5)", "Pure Neutral (Hedge 1.0)"], width=300)
         self.combo_risk_mode.pack(anchor="w", padx=20)
 
@@ -915,16 +931,25 @@ class PairsTraderGUI(ctk.CTk):
             if batch_text:
                 self.txt_logs.insert("end", batch_text)
                 
-                # Trim log via Python strings to prevent Tkinter fragmentation lag
-                full_text = self.txt_logs.get("1.0", "end-1c")
-                lines = full_text.split("\n")
-                if len(lines) > 1000:
-                    trimmed_text = "\n".join(lines[-1000:])
-                    self.txt_logs.delete("1.0", "end")
-                    self.txt_logs.insert("end", trimmed_text)
+                # Trim log efficiently via Tkinter index to prevent redraw lag
+                try:
+                    num_lines = int(self.txt_logs.index("end-1c").split(".")[0])
+                    if num_lines > 200:
+                        delete_count = num_lines - 200
+                        self.txt_logs.delete("1.0", f"{delete_count + 1}.0")
+                except Exception:
+                    pass
                     
                 self.txt_logs.see("end")
             self.txt_logs.configure(state="disabled")
+            
+        # Garbage collect every 60 seconds to purge unreferenced Tkinter objects
+        import time, gc
+        if not hasattr(self, "last_gc_time"):
+            self.last_gc_time = time.time()
+        if time.time() - self.last_gc_time > 60:
+            gc.collect()
+            self.last_gc_time = time.time()
             
         self.after(500, self.update_ui_loop)
 
@@ -946,7 +971,13 @@ class PairsTraderGUI(ctk.CTk):
                 self.loaded_sym_b = sym_b
                 
                 if sym_a == "BTC/USDT:USDT" and sym_b == "ETH/USDT:USDT":
-                    self.strategy_var.set("BTC vs ETH (Optimized)")
+                    # Keep existing choice if it's already a valid BTC vs ETH config
+                    curr = self.strategy_var.get()
+                    if curr not in ["BTC vs ETH (Ultra-Safe)", "BTC vs ETH (Max Profit)"]:
+                        self.strategy_var.set("BTC vs ETH (Ultra-Safe)")
+                    self.frm_symbols.pack_forget()
+                elif sym_a == "ETH/USDT:USDT" and sym_b == "SOL/USDT:USDT":
+                    self.strategy_var.set("ETH vs SOL (Optimized)")
                     self.frm_symbols.pack_forget()
                 else:
                     self.strategy_var.set("Custom Pairs")
@@ -1002,6 +1033,29 @@ class PairsTraderGUI(ctk.CTk):
 
             hr_str = self.combo_risk_mode.get()
             hr = 1.0 if "1.0" in hr_str else 0.5
+            z_thresh = float(self.entry_zthresh.get()) if self.entry_zthresh.get() else 3.0
+            
+            strat = getattr(self, 'strategy_var', None)
+            strat_val = strat.get() if strat else ""
+            
+            max_hold_sec = 24 * 3600
+            stop_loss_pct = 0.20
+            
+            if strat_val == "BTC vs ETH (Ultra-Safe)":
+                hr = 0.5
+                z_thresh = 4.5
+                max_hold_sec = 24 * 3600
+                stop_loss_pct = 0.125
+            elif strat_val == "BTC vs ETH (Max Profit)":
+                hr = 1.5
+                z_thresh = 4.0
+                max_hold_sec = 24 * 3600
+                stop_loss_pct = 0.125
+            elif strat_val == "ETH vs SOL (Optimized)":
+                hr = 0.5
+                z_thresh = 3.0
+                max_hold_sec = 12 * 3600
+                stop_loss_pct = 0.25
             
             # Hard Cap Check (Sync)
             try:
@@ -1031,8 +1085,10 @@ class PairsTraderGUI(ctk.CTk):
                 "symbols": [sym_a, sym_b],
                 "pairs_trading": {
                     "notional_per_leg": float(self.entry_notional.get()),
-                    "z_entry_threshold": float(self.entry_zthresh.get()) if self.entry_zthresh.get() else 3.0,
-                    "hedge_ratio": hr
+                    "z_entry_threshold": z_thresh,
+                    "hedge_ratio": hr,
+                    "max_hold_sec": max_hold_sec,
+                    "stop_loss_pct": stop_loss_pct
                 },
                 "app_settings": {
                     "sound_alerts": bool(self.sw_sound.get())
