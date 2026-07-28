@@ -382,7 +382,7 @@ class PairsTraderGUI(ctk.CTk):
         panel_logs.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(panel_logs, text="Sanitized Live System Logs (Math Protected)", font=ctk.CTkFont(family="Inter", size=14), text_color="white").pack(anchor="w", padx=15, pady=(10, 0))
         
-        self.txt_logs = ctk.CTkTextbox(panel_logs, height=100, fg_color="#1E1E1E", text_color="#A0A0A0", font=ctk.CTkFont(family="Consolas", size=11), wrap="none")
+        self.txt_logs = ctk.CTkTextbox(panel_logs, height=100, fg_color="#1E1E1E", text_color="#A0A0A0", font=ctk.CTkFont(family="Consolas", size=11), wrap="none", undo=False)
         self.txt_logs.pack(fill="both", expand=True, padx=15, pady=10)
         self.txt_logs.configure(state="disabled")
         
