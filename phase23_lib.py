@@ -151,7 +151,7 @@ def load_cfg(path: str = "user_settings.yaml") -> BotConfig:
         api_secret=api_secret,
         symbols=d.get("symbols", ["BTC/USDT:USDT", "ETH/USDT:USDT"]),
         context_symbols=["BTC/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "ETH/USDT:USDT"],
-        testnet=False,
+        testnet=d.get("testnet", False),
         start_balance=150.0,
 
         usdt_per_level=5.0,
@@ -304,6 +304,8 @@ class BinanceAdapter(ExchangeAdapter):
             "options": {"defaultType": "future", "adjustForTimeDifference": True, "recvWindow": 20000, "broker": {"future": "x-XSY2ZGS8", "spot": "x-XSY2ZGS8", "swap": "x-XSY2ZGS8", "linear": "x-XSY2ZGS8", "delivery": "x-XSY2ZGS8"}},
         })
         if cfg.testnet:
+            self.exchange.apiKey = os.getenv("BINANCE_TESTNET_API_KEY", cfg.api_key)
+            self.exchange.secret = os.getenv("BINANCE_TESTNET_API_SECRET", cfg.api_secret)
             self.exchange.set_sandbox_mode(True)
 
         self._backoff_until = 0.0
